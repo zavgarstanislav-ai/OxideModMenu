@@ -19,392 +19,244 @@ import android.view.WindowManager
 import android.view.animation.DecelerateInterpolator
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.SeekBar
 import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 
 class OverlayService : Service() {
-    private lateinit var windowManager: WindowManager
-    private var panelView: View? = null
-    private var bubbleView: View? = null
+    private lateinit var wm: WindowManager
+    private val prefs by lazy { getSharedPreferences("oxide_ui", MODE_PRIVATE) }
+    private var panel: LinearLayout? = null
+    private var bubble: TextView? = null
     private lateinit var panelParams: WindowManager.LayoutParams
     private lateinit var bubbleParams: WindowManager.LayoutParams
-    private var selectedTab = 0
-    private var themeIndex = 0
+    private var tab = 0
     private var expanded = true
 
-    private val accents = intArrayOf(
-        Color.rgb(255, 65, 65),
-        Color.rgb(0, 210, 190),
-        Color.rgb(170, 110, 255)
-    )
-    private val themeNames = arrayOf("Crimson", "Neon teal", "Violet")
-    private val accent: Int get() = accents[themeIndex]
-    private val dark = Color.rgb(18, 18, 18)
-    private val muted = Color.rgb(165, 165, 165)
+    private val accents = intArrayOf(Color.rgb(255,65,65), Color.rgb(0,210,190), Color.rgb(170,110,255), Color.rgb(255,150,35))
+    private val themeNames = listOf("Красный", "Бирюзовый", "Фиолетовый", "Оранжевый")
+    private val accent get() = accents[prefs.getInt("theme", 0).coerceIn(accents.indices)]
+    private val dark = Color.rgb(18,18,18)
+    private val muted = Color.rgb(165,165,165)
 
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onCreate() {
         super.onCreate()
-        if (!Settings.canDrawOverlays(this)) {
-            stopSelf()
-            return
-        }
-        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        startForeground(NOTIFICATION_ID, buildNotification())
-        showMenu()
-    }
-
-    private fun buildNotification(): Notification {
-        val channelId = "oxide_floating_menu"
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(
-                NotificationChannel(channelId, "Oxide floating menu", NotificationManager.IMPORTANCE_LOW)
-            )
-        }
-        val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Notification.Builder(this, channelId)
-        } else {
-            @Suppress("DEPRECATION")
-            Notification.Builder(this)
-        }
-        return builder.setSmallIcon(android.R.drawable.ic_menu_view)
-            .setContentTitle("Oxide Menu")
-            .setContentText("Floating demo interface is active")
-            .setOngoing(true)
-            .build()
-    }
-
-    private fun showMenu() {
+        if (!Settings.canDrawOverlays(this)) { stopSelf(); return }
+        wm = getSystemService(WINDOW_SERVICE) as WindowManager
+        startForeground(1001, notification())
         panelParams = WindowManager.LayoutParams(
-            dp(310), WindowManager.LayoutParams.WRAP_CONTENT,
+            dp(prefs.getInt("width", 320)), WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = dp(18)
-            y = dp(90)
-        }
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT
+        ).apply { gravity = Gravity.TOP or Gravity.START; x = dp(18); y = dp(90) }
         bubbleParams = WindowManager.LayoutParams(
-            dp(58), dp(58),
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
-            PixelFormat.TRANSLUCENT
-        ).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = dp(18)
-            y = dp(110)
+            dp(58), dp(58), WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT
+        ).apply { gravity = Gravity.TOP or Gravity.START; x = dp(18); y = dp(110) }
+        showExpanded(true)
+    }
+
+    private fun notification(): Notification {
+        val id = "oxide_floating_menu"
+        if (Build.VERSION.SDK_INT >= 26) {
+            getSystemService(NotificationManager::class.java).createNotificationChannel(
+                NotificationChannel(id, "Oxide floating menu", NotificationManager.IMPORTANCE_LOW))
         }
-        showExpanded(animate = true)
+        val b = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, id) else {
+            @Suppress("DEPRECATION") Notification.Builder(this)
+        }
+        return b.setSmallIcon(android.R.drawable.ic_menu_view)
+            .setContentTitle("t.me/game_soft_svk").setContentText("Floating interface is active")
+            .setOngoing(true).build()
     }
 
     private fun makePanel(): LinearLayout {
-        val panel = LinearLayout(this).apply {
+        val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(14), dp(10), dp(14), dp(12))
-            background = rounded(dark, accent, 18)
-            alpha = 0f
-            scaleX = 0.92f
-            scaleY = 0.92f
+            background = shape(dark, accent, prefs.getInt("radius", 18))
+            alpha = prefs.getInt("opacity", 96) / 100f
         }
-
-        val header = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
+        val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         val title = TextView(this).apply {
-            text = "t.me/game_soft_svk"
-            textSize = 19f
-            setTextColor(accent)
-            typeface = Typeface.DEFAULT_BOLD
+            text = prefs.getString("title", "t.me/game_soft_svk")
+            textSize = 18f; setTextColor(accent); typeface = Typeface.DEFAULT_BOLD
             setPadding(dp(2), 0, 0, 0)
         }
-        val collapse = smallButton("−") { collapseMenu() }
-        val close = smallButton("×") { stopSelf() }
-        header.addView(title, LinearLayout.LayoutParams(0, dp(42), 1f))
-        header.addView(collapse, LinearLayout.LayoutParams(dp(42), dp(42)))
-        header.addView(close, LinearLayout.LayoutParams(dp(42), dp(42)))
-        panel.addView(header)
+        header.addView(title, LinearLayout.LayoutParams(0, dp(44), 1f))
+        header.addView(actionButton("−") { collapse() }, LinearLayout.LayoutParams(dp(42), dp(42)))
+        header.addView(actionButton("×") { stopSelf() }, LinearLayout.LayoutParams(dp(42), dp(42)))
+        root.addView(header)
         attachDrag(title, panelParams)
 
-        val tabs = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(8), 0, dp(8))
-        }
-        listOf("HOME", "VISUAL", "SETTINGS").forEachIndexed { index, label ->
-            val tab = TextView(this).apply {
-                text = label
-                textSize = 11f
-                gravity = Gravity.CENTER
-                setTextColor(if (selectedTab == index) accent else muted)
-                typeface = if (selectedTab == index) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
-                setPadding(dp(5), dp(10), dp(5), dp(10))
-                background = if (selectedTab == index) rounded(0xFF292020.toInt(), accent, 8) else null
-                setOnClickListener {
-                    selectedTab = index
-                    refreshPanel()
-                }
+        val tabs = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; setPadding(0, dp(7), 0, dp(8)) }
+        listOf("HOME", "VISUAL", "SETTINGS").forEachIndexed { i, name ->
+            val item = TextView(this).apply {
+                text = name; gravity = Gravity.CENTER; textSize = 11f
+                setTextColor(if (tab == i) accent else muted)
+                typeface = if (tab == i) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+                setPadding(dp(4), dp(10), dp(4), dp(10))
+                background = if (tab == i) shape(0xFF292020.toInt(), accent, 8) else null
+                setOnClickListener { tab = i; rebuild() }
             }
-            tabs.addView(tab, LinearLayout.LayoutParams(0, dp(38), 1f))
+            tabs.addView(item, LinearLayout.LayoutParams(0, dp(38), 1f))
         }
-        panel.addView(tabs)
-
-        val divider = View(this).apply { setBackgroundColor(0xFF383838.toInt()) }
-        panel.addView(divider, LinearLayout.LayoutParams(-1, dp(1)))
-
-        val content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(8), 0, dp(2))
-        }
-        when (selectedTab) {
-            0 -> buildHome(content)
-            1 -> buildVisual(content)
-            else -> buildSettings(content)
-        }
-        panel.addView(content)
-        return panel
+        root.addView(tabs)
+        root.addView(View(this).apply { setBackgroundColor(0xFF383838.toInt()) }, LinearLayout.LayoutParams(-1, dp(1)))
+        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(8), 0, 0) }
+        when (tab) { 0 -> home(body); 1 -> visual(body); else -> settings(body) }
+        root.addView(body)
+        return root
     }
 
-    private fun buildHome(container: LinearLayout) {
-        addSectionLabel(container, "DEMO CONTROLS")
-        listOf("Aimbot", "ESP / Wallhack", "Speedhack", "God Mode", "No Recoil").forEach { feature ->
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(2), dp(2), dp(2), dp(2))
-            }
-            val label = TextView(this).apply {
-                text = "$feature  ·  demo"
-                textSize = 13f
-                setTextColor(Color.WHITE)
-            }
-            val toggle = Switch(this).apply {
-                isChecked = false
-                setOnCheckedChangeListener { _, enabled ->
-                    Toast.makeText(this@OverlayService,
-                        "$feature: ${if (enabled) "ON" else "OFF"} · visual demo only",
-                        Toast.LENGTH_SHORT).show()
-                }
-            }
-            row.addView(label, LinearLayout.LayoutParams(0, dp(42), 1f))
-            row.addView(toggle)
-            container.addView(row)
-        }
-        addHint(container, "These switches only demonstrate the interface.")
+    private fun home(body: LinearLayout) {
+        section(body, "ПАРАМЕТРЫ ИНТЕРФЕЙСА")
+        prefSwitch(body, "Показывать подписи", "labels", true)
+        prefSwitch(body, "Компактный вид", "compact", false)
+        prefSwitch(body, "Подтверждать переключения", "feedback", true)
+        hint(body, "Это настройки самого плавающего меню. Они не изменяют игровой процесс.")
     }
 
-    private fun buildVisual(container: LinearLayout) {
-        addSectionLabel(container, "INTERFACE")
-        addHint(container, "Floating window · draggable header · animated open/close")
-        addActionRow(container, "Collapse to red floating button") { collapseMenu() }
-        addActionRow(container, "Play opening animation") {
-            panelView?.let { animateIn(it) }
+    private fun visual(body: LinearLayout) {
+        section(body, "ВНЕШНИЙ ВИД")
+        slider(body, "Прозрачность окна", "opacity", 55, 100, 96, "%") { value ->
+            panel?.alpha = value / 100f
         }
-        addHint(container, "Visual-only controls; no game interaction.")
+        slider(body, "Ширина меню", "width", 270, 390, 320, " dp") { value ->
+            panelParams.width = dp(value)
+            panel?.let { if (it.isAttachedToWindow) wm.updateViewLayout(it, panelParams) }
+        }
+        slider(body, "Скругление углов", "radius", 8, 30, 18, " dp") { value -> panel?.background = shape(dark, accent, value) }
+        actionRow(body, "Свернуть в красную кнопку") { collapse() }
+        actionRow(body, "Показать анимацию открытия") { panel?.let { animateIn(it) } }
     }
 
-    private fun buildSettings(container: LinearLayout) {
-        addSectionLabel(container, "ACCENT COLOR")
-        themeNames.forEachIndexed { index, name ->
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(dp(4), dp(7), dp(4), dp(7))
-            }
-            val swatch = View(this).apply {
-                background = GradientDrawable().apply {
-                    shape = GradientDrawable.OVAL
-                    setColor(accents[index])
-                }
-            }
-            val label = TextView(this).apply {
-                text = name
-                textSize = 14f
-                setTextColor(Color.WHITE)
-                setPadding(dp(12), 0, 0, 0)
-            }
-            val selected = TextView(this).apply {
-                text = if (themeIndex == index) "✓" else ""
-                textSize = 18f
-                setTextColor(accents[index])
-            }
-            row.addView(swatch, LinearLayout.LayoutParams(dp(18), dp(18)))
+    private fun settings(body: LinearLayout) {
+        section(body, "ЦВЕТОВАЯ ТЕМА")
+        themeNames.forEachIndexed { i, name ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL; setPadding(dp(4), dp(5), dp(4), dp(5)) }
+            val dot = View(this).apply { background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(accents[i]) } }
+            row.addView(dot, LinearLayout.LayoutParams(dp(18), dp(18)))
+            val label = TextView(this).apply { text = name; textSize = 14f; setTextColor(Color.WHITE); setPadding(dp(12),0,0,0) }
             row.addView(label, LinearLayout.LayoutParams(0, dp(34), 1f))
-            row.addView(selected)
-            row.setOnClickListener {
-                themeIndex = index
-                refreshPanel()
+            row.addView(TextView(this).apply { text = if (prefs.getInt("theme",0)==i) "✓" else ""; setTextColor(accents[i]); textSize = 18f })
+            row.setOnClickListener { prefs.edit().putInt("theme", i).apply(); rebuild() }
+            body.addView(row)
+        }
+        section(body, "ПОВЕДЕНИЕ")
+        slider(body, "Скорость анимации", "anim", 100, 500, 220, " мс") {}
+        actionRow(body, "Сбросить оформление") {
+            prefs.edit().clear().apply(); panelParams.width = dp(320); tab = 2; rebuild()
+            Toast.makeText(this, "Настройки сброшены", Toast.LENGTH_SHORT).show()
+        }
+        hint(body, "Все изменения сохраняются автоматически на устройстве.")
+    }
+
+    private fun prefSwitch(parent: LinearLayout, label: String, key: String, default: Boolean) {
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
+        val text = TextView(this).apply { text = label; textSize = 13f; setTextColor(Color.WHITE) }
+        val sw = Switch(this).apply {
+            isChecked = prefs.getBoolean(key, default)
+            setOnCheckedChangeListener { _, checked ->
+                prefs.edit().putBoolean(key, checked).apply()
+                if (prefs.getBoolean("feedback", true)) Toast.makeText(this@OverlayService, "$label: ${if (checked) "ВКЛ" else "ВЫКЛ"}", Toast.LENGTH_SHORT).show()
             }
-            container.addView(row)
         }
-        addHint(container, "Theme changes apply to the floating menu.")
+        row.addView(text, LinearLayout.LayoutParams(0, dp(44), 1f)); row.addView(sw); parent.addView(row)
     }
 
-    private fun addSectionLabel(parent: LinearLayout, text: String) {
-        parent.addView(TextView(this).apply {
-            this.text = text
-            textSize = 10f
-            typeface = Typeface.DEFAULT_BOLD
-            setTextColor(accent)
-            setPadding(dp(2), dp(5), 0, dp(7))
-        })
-    }
-
-    private fun addHint(parent: LinearLayout, text: String) {
-        parent.addView(TextView(this).apply {
-            this.text = text
-            textSize = 11f
-            setTextColor(muted)
-            setPadding(dp(3), dp(8), dp(3), dp(5))
-        })
-    }
-
-    private fun addActionRow(parent: LinearLayout, text: String, action: () -> Unit) {
-        val button = TextView(this).apply {
-            this.text = text
-            textSize = 13f
-            setTextColor(Color.WHITE)
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(10), dp(10), dp(10), dp(10))
-            background = rounded(0xFF292929.toInt(), 0xFF444444.toInt(), 9)
-            setOnClickListener { action() }
+    private fun slider(parent: LinearLayout, label: String, key: String, min: Int, max: Int, default: Int, suffix: String, changed: (Int)->Unit) {
+        val title = TextView(this).apply { textSize = 12f; setTextColor(Color.WHITE) }
+        val bar = SeekBar(this).apply {
+            this.max = max - min
+            progress = (prefs.getInt(key, default).coerceIn(min,max) - min)
+            progressTintList = android.content.res.ColorStateList.valueOf(accent)
+            thumbTintList = android.content.res.ColorStateList.valueOf(accent)
         }
-        val params = LinearLayout.LayoutParams(-1, dp(44))
-        params.topMargin = dp(7)
-        parent.addView(button, params)
+        fun update(v: Int) { title.text = "$label: $v$suffix"; prefs.edit().putInt(key,v).apply(); changed(v) }
+        update(bar.progress + min)
+        bar.setOnSeekBarChangeListener(object: SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) { update(progress+min) }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+        parent.addView(title); parent.addView(bar)
     }
 
-    private fun smallButton(text: String, action: () -> Unit) = Button(this).apply {
-        this.text = text
-        textSize = 20f
-        setTextColor(Color.WHITE)
-        setBackgroundColor(Color.TRANSPARENT)
-        setOnClickListener { action() }
+    private fun section(parent: LinearLayout, text: String) {
+        parent.addView(TextView(this).apply { this.text=text; textSize=10f; typeface=Typeface.DEFAULT_BOLD; setTextColor(accent); setPadding(dp(2),dp(7),0,dp(5)) })
+    }
+    private fun hint(parent: LinearLayout, text: String) {
+        if (!prefs.getBoolean("labels", true)) return
+        parent.addView(TextView(this).apply { this.text=text; textSize=10f; setTextColor(muted); setPadding(dp(3),dp(8),dp(3),dp(4)) })
+    }
+    private fun actionRow(parent: LinearLayout, text: String, action: ()->Unit) {
+        val v = TextView(this).apply { this.text=text; textSize=12f; setTextColor(Color.WHITE); gravity=Gravity.CENTER_VERTICAL; setPadding(dp(10),dp(9),dp(10),dp(9)); background=shape(0xFF292929.toInt(),0xFF444444.toInt(),9); setOnClickListener { action() } }
+        val lp=LinearLayout.LayoutParams(-1,dp(42)); lp.topMargin=dp(6); parent.addView(v,lp)
+    }
+    private fun actionButton(label: String, action: ()->Unit) = Button(this).apply {
+        text=label; textSize=20f; setTextColor(Color.WHITE); setBackgroundColor(Color.TRANSPARENT); setOnClickListener { action() }
+    }
+    private fun shape(fill: Int, stroke: Int, radius: Int) = GradientDrawable().apply {
+        setColor(fill); cornerRadius=dp(radius).toFloat(); setStroke(dp(2),stroke)
     }
 
-    private fun rounded(fill: Int, stroke: Int, radius: Int) = GradientDrawable().apply {
-        setColor(fill)
-        cornerRadius = dp(radius).toFloat()
-        setStroke(dp(2), stroke)
-    }
-
-    private fun refreshPanel() {
+    private fun rebuild() {
         if (!expanded) return
-        val old = panelView
-        if (old != null && old.isAttachedToWindow) windowManager.removeView(old)
-        val fresh = makePanel()
-        panelView = fresh
-        windowManager.addView(fresh, panelParams)
-        animateIn(fresh)
+        panel?.let { if (it.isAttachedToWindow) wm.removeView(it) }
+        val next=makePanel(); panel=next; wm.addView(next,panelParams); animateIn(next)
     }
-
     private fun showExpanded(animate: Boolean) {
-        bubbleView?.let { if (it.isAttachedToWindow) windowManager.removeView(it) }
-        bubbleView = null
-        expanded = true
-        val panel = makePanel()
-        panelView = panel
-        windowManager.addView(panel, panelParams)
-        if (animate) animateIn(panel) else {
-            panel.alpha = 1f
-            panel.scaleX = 1f
-            panel.scaleY = 1f
-        }
+        bubble?.let { if (it.isAttachedToWindow) wm.removeView(it) }; bubble=null; expanded=true
+        val v=makePanel(); panel=v; wm.addView(v,panelParams)
+        if (animate) animateIn(v) else { v.alpha=1f; v.scaleX=1f; v.scaleY=1f }
     }
-
-    private fun animateIn(view: View) {
-        view.animate().cancel()
-        view.alpha = 0f
-        view.scaleX = 0.88f
-        view.scaleY = 0.88f
-        view.animate().alpha(1f).scaleX(1f).scaleY(1f)
-            .setDuration(220).setInterpolator(DecelerateInterpolator()).start()
+    private fun animateIn(v: View) {
+        v.animate().cancel(); v.alpha=0f; v.scaleX=.88f; v.scaleY=.88f
+        v.animate().alpha(prefs.getInt("opacity",96)/100f).scaleX(1f).scaleY(1f)
+            .setDuration(prefs.getInt("anim",220).toLong()).setInterpolator(DecelerateInterpolator()).start()
     }
-
-    private fun collapseMenu() {
-        val old = panelView ?: return
-        old.animate().alpha(0f).scaleX(0.85f).scaleY(0.85f).setDuration(130)
-            .withEndAction {
-                if (old.isAttachedToWindow) windowManager.removeView(old)
-                panelView = null
-                showBubble()
-            }.start()
+    private fun collapse() {
+        val old=panel ?: return
+        old.animate().alpha(0f).scaleX(.85f).scaleY(.85f).setDuration(130).withEndAction {
+            if (old.isAttachedToWindow) wm.removeView(old); panel=null; showBubble()
+        }.start()
     }
-
     private fun showBubble() {
-        expanded = false
-        val bubble = TextView(this).apply {
-            text = "O"
-            textSize = 25f
-            typeface = Typeface.DEFAULT_BOLD
-            gravity = Gravity.CENTER
-            setTextColor(Color.WHITE)
-            background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
-                setColor(accent)
-                setStroke(dp(2), Color.WHITE)
-            }
-            alpha = 0f
-            scaleX = 0.7f
-            scaleY = 0.7f
-            setOnClickListener { showExpanded(animate = true) }
+        expanded=false
+        val v=TextView(this).apply {
+            text="O"; textSize=25f; typeface=Typeface.DEFAULT_BOLD; gravity=Gravity.CENTER; setTextColor(Color.WHITE)
+            background=GradientDrawable().apply { shape=GradientDrawable.OVAL; setColor(accent); setStroke(dp(2),Color.WHITE) }
+            alpha=0f; scaleX=.7f; scaleY=.7f
+            setOnClickListener { showExpanded(true) }
         }
-        bubbleView = bubble
-        windowManager.addView(bubble, bubbleParams)
-        bubble.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(180)
-            .setInterpolator(DecelerateInterpolator()).start()
-        attachDrag(bubble, bubbleParams)
+        bubble=v; wm.addView(v,bubbleParams)
+        v.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(180).start()
+        attachDrag(v,bubbleParams)
     }
-
     private fun attachDrag(view: View, params: WindowManager.LayoutParams) {
-        view.setOnTouchListener(object : View.OnTouchListener {
-            private var startX = 0
-            private var startY = 0
-            private var touchX = 0f
-            private var touchY = 0f
-            private var moved = false
-            override fun onTouch(v: View, event: MotionEvent): Boolean {
-                when (event.action) {
-                    MotionEvent.ACTION_DOWN -> {
-                        startX = params.x
-                        startY = params.y
-                        touchX = event.rawX
-                        touchY = event.rawY
-                        moved = false
-                        return false
-                    }
+        view.setOnTouchListener(object: View.OnTouchListener {
+            var sx=0; var sy=0; var tx=0f; var ty=0f; var moved=false
+            override fun onTouch(v: View, e: MotionEvent): Boolean {
+                when(e.action) {
+                    MotionEvent.ACTION_DOWN -> { sx=params.x; sy=params.y; tx=e.rawX; ty=e.rawY; moved=false; return false }
                     MotionEvent.ACTION_MOVE -> {
-                        val dx = (event.rawX - touchX).toInt()
-                        val dy = (event.rawY - touchY).toInt()
-                        if (kotlin.math.abs(dx) > dp(5) || kotlin.math.abs(dy) > dp(5)) moved = true
-                        if (moved) {
-                            params.x = startX + dx
-                            params.y = startY + dy
-                            if (view.isAttachedToWindow) windowManager.updateViewLayout(view, params)
-                            return true
-                        }
+                        val dx=(e.rawX-tx).toInt(); val dy=(e.rawY-ty).toInt()
+                        if (kotlin.math.abs(dx)>dp(5)||kotlin.math.abs(dy)>dp(5)) moved=true
+                        if (moved) { params.x=sx+dx; params.y=sy+dy; if(view.isAttachedToWindow) wm.updateViewLayout(view,params); return true }
                     }
-                    MotionEvent.ACTION_UP -> if (moved) return true
-                }
-                return false
+                    MotionEvent.ACTION_UP -> if(moved) return true
+                }; return false
             }
         })
     }
-
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
-
+    private fun dp(v: Int)= (v*resources.displayMetrics.density).toInt()
     override fun onDestroy() {
-        panelView?.let { if (it.isAttachedToWindow) windowManager.removeView(it) }
-        bubbleView?.let { if (it.isAttachedToWindow) windowManager.removeView(it) }
-        panelView = null
-        bubbleView = null
-        super.onDestroy()
-    }
-
-    companion object {
-        private const val NOTIFICATION_ID = 1001
+        panel?.let { if(it.isAttachedToWindow) wm.removeView(it) }
+        bubble?.let { if(it.isAttachedToWindow) wm.removeView(it) }
+        panel=null; bubble=null; super.onDestroy()
     }
 }
