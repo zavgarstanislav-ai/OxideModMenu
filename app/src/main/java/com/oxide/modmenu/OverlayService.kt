@@ -116,7 +116,7 @@ class OverlayService : Service() {
             gravity = Gravity.CENTER_VERTICAL
         }
         val title = TextView(this).apply {
-            text = "OXIDE MENU"
+            text = "t.me/game_soft_svk"
             textSize = 19f
             setTextColor(accent)
             typeface = Typeface.DEFAULT_BOLD
